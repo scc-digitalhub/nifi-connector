@@ -1,0 +1,44 @@
+metadata:
+  name: nodejs-nifi-connector
+spec:
+  description: "Provision Users,ProcessGroup, Policy for NiFi"
+  handler: "main:handler"
+  runtime: nodejs
+  env:
+    - name: AACJWKURL
+      value: "http://AAC_URL:8080/aac/jwk"
+    - name: AACRESOURCEID
+      value: AAC_RESOURCE_ID_VALUE
+    - name: NIFIENDPOINT
+      value: "http://NIFI_URL:8443/nifi_api"
+    - name: NIFI_CERTIFICATE_PASSW
+      value: cert_password
+  resources: {}
+  image: "nuclio/processor-nodejs-nifi:latest"
+  minReplicas: 1
+  maxReplicas: 1
+  targetCPU: 75
+  build:
+    image: ""
+    noCache: false
+    offline: false
+    dependencies: []
+    runtimeAttributes:
+      repositories: []
+    commands:
+      - 'npm install --global moment'
+      - 'npm install --global jsonwebtoken'
+      - 'npm install --global axios'
+      - 'npm install --global jwks-rsa'
+      - 'npm install --global request'
+    codeEntryType: sourceCode
+  volumes:
+    - volumeMount:
+        name: certificate
+        mountPath: /certificates
+      volume:
+        name: certificate
+        hostPath:
+          path: /PATH_TO_NIFI_CERTIFICATE
+  platform: {}
+  readinessTimeoutSeconds: 60
