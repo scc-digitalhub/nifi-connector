@@ -257,6 +257,7 @@ var createPolicy = async (action, resource, PGName, userGrps, userName) => {
                 return result.data;
             }).catch(error => {
                 console.log('During createPolicy.' + error);
+            });
         });
 }
 
