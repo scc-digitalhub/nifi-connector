@@ -1,3 +1,4 @@
+
 var jwt = require('jsonwebtoken');
 var axios = require('axios');
 var fs = require('fs');
@@ -9,18 +10,20 @@ var NIFI_ENDPOINT            = process.env.NIFIENDPOINT;
 var NIFI_CERTIFICATE_PASSW   = process.env.NIFI_CERTIFICATE_PASSW;
 var CUSTOMCLAIM_ROLES        = "nifi/roles";
 var NIFI_PARENT_ROOT         = "root";
-var NIFI_ROLES               = ['ROLE_PROVIDER','ROLE_MONITOR','ROLE_MANAGER'];
+var NIFI_ROLE_PROVIDER       = 'ROLE_PROVIDER';
+var NIFI_ROLE_MANAGER        = 'ROLE_MANAGER';
+var NIFI_ROLES               = [NIFI_ROLE_PROVIDER,'ROLE_MONITOR', NIFI_ROLE_MANAGER];
 var TYPE_PROCESS_GROUP       = "/process-groups/"; // view/modify process group flow
 var TYPE_OPERATION           = "/operation/process-groups/"; // operate (run, stop, etc.) the process group
 var TYPE_PROVENANCE          = "/provenance-data/process-groups/"; // view provenance events
 var TYPE_DATA                = "/data/process-groups/"; // view/empty queues, view metadata, submit replays
 var ACTION_READ              = "read";
 var ACTION_WRITE             = "write";
-var ADMIN_USER               = "admin";
+var ADMIN_USER               = "CN=admin, OU=NIFI";
 
 const httpsAgent = new https.Agent({
-  pfx: fs.readFileSync("./certificates/certificate.p12"),
-  passphrase: NIFI_CERTIFICATE_PASSW, 
+  pfx: fs.readFileSync("./certificates/CN=admin_OU=NIFI.p12"),
+  passphrase: NIFI_CERTIFICATE_PASSW
 })
 
 /**
@@ -69,29 +72,30 @@ context.callback(new context.Response({message: 'Missing token'}, {}, 'applicati
  * Create ProcessGroup
  */
 var createProcessGroup = async (parentId, processGroupName, processGroupId, assignRole, roleName, username) =>{
-    var objToBeSent = {'revision': {'version': 0},'component': {'name': processGroupName}};
-    console.log("Inside PG creation of processGroupName: " + processGroupName + " " + NIFI_ENDPOINT + '/process-groups/' + parentId + '/process-groups');
     if(processGroupId === 0){
-        return axios.post(NIFI_ENDPOINT + '/process-groups/' + parentId + '/process-groups', objToBeSent, {httpsAgent})
-            .then(response => {
-                console.log("created pgid " + response.data.id);
-                createUser(username);
-                for(var i=0;i<NIFI_ROLES.length; i++){
-                    handleUserGroup(processGroupName + ":" + NIFI_ROLES[i], processGroupName);
-                }
-                assignPolicy(response.data.id, processGroupName, username);
-                if(assignRole) assignRole2User(processGroupName + ":" + "ROLE_PROVIDER", username, response.data.id);
-                return [response.data.id, 0, 0]
-            });
+        var newPGId = await createPG(parentId, processGroupName);
+        await createUser(username);
+        await NIFI_ROLES.reduce((p,role) => p.then(() => handleUserGroup(processGroupName + ":" + role)), Promise.resolve(null));
+        await assignPolicy(newPGId, processGroupName, username);
+        if(assignRole) assignRole2User(processGroupName + ":" + roleName, username, newPGId);
+        return [newPGId, 0, 0]
     } else{
-        createUser(username);
-        for(var i=0;i<NIFI_ROLES.length; i++){
-            handleUserGroup(processGroupName + ":" + NIFI_ROLES[i], processGroupName);
-        }
-        assignPolicy(processGroupId, processGroupName, username);
-        if(assignRole) assignRole2User(processGroupName + ":" + "ROLE_PROVIDER", username, processGroupId);
+        await createUser(username);
+        await NIFI_ROLES.reduce((p,role) => p.then(() => handleUserGroup(processGroupName + ":" + role)), Promise.resolve(null));
+        await assignPolicy(processGroupId, processGroupName, username);
+        if(assignRole) assignRole2User(processGroupName + ":" + roleName, username, processGroupId);
         return Promise.resolve([processGroupId, processGroupName, parentId]);
     }
+}
+
+var createPG = (parentId, processGroupName) =>{
+    var objToBeSent = {'revision': {'version': 0},'position': {'x':Math.floor(Math.random()*1000), 'y':Math.floor(Math.random()*1000)}, 'component': {'name': processGroupName}};
+    console.log("Inside PG creation of processGroupName: " + processGroupName + " " + NIFI_ENDPOINT + '/process-groups/' + parentId + '/process-groups');
+    return axios.post(NIFI_ENDPOINT + '/process-groups/' + parentId + '/process-groups', objToBeSent, {httpsAgent})
+        .then(response => {
+            console.log("created pgid " + response.data.id);
+            return response.data.id;
+        });
 }
 
 /**
@@ -142,17 +146,11 @@ var readRecursivePG =  (pgSnapshots, processGroupName) => {
 /**
  * Create UserGroup
  */
-var handleUserGroup = (userGrpName, processGroup) => {
+var handleUserGroup = (userGrpName) => {
     var objToBeSent = {'revision': {'version': 0},'component': {'identity': userGrpName}};
-    console.log(objToBeSent);
     return axios.post(NIFI_ENDPOINT + '/tenants/user-groups', objToBeSent, {httpsAgent})
-        .then(function(res) {
-            console.log('User Group ' + userGrpName + ' successfully created. ');
-            assignPolicy();
-            return res.data.id;
-        }).catch(function(err) {
-            console.log('UserGroup already exists. Error during user Group creation ' + userGrpName  + err);
-        });
+        .then(res => {console.log('User Group ' + userGrpName + ' successfully created. ');return res.data.id;})
+        .catch(err => console.log('During user Group creation. UserGroup ' + userGrpName + ' already exists. ' + err));
 }
 
 /**
@@ -172,64 +170,57 @@ var getUserGroup = (userGrpName) => {
         });
 }
 /**
- * get List of UserGroup
- */
-var listGroups = () => {
-    return axios.get(NIFI_ENDPOINT + '/tenants/user-groups', {httpsAgent})
-        .then(result => {console.log("listing user grps. ");console.log(result.data); return result.data})
-        .catch(error => console.log('Error during getUserGroup ' + err));
-}
-
-/**
  * Create User
  */
 var createUser = async(userName) => {
     var objToBeSent = {'revision': {'version': 0},'component': {'identity': userName}};
-    console.log(objToBeSent);
-    var policyUI = await getPolicy(ACTION_READ, "/flow");
-    axios.post(NIFI_ENDPOINT + '/tenants/users', objToBeSent, {httpsAgent})
-        .then(function(res) {
-            console.log('User ' + userName + ' successfully created. ');
-            if(policyUI != null && policyUI.users != null){
-                policyUI.users.push(res.data);
-                axios.put(NIFI_ENDPOINT + '/policies/'+ policyUI.id, policyUI, {httpsAgent})
-                    .then(result => console.log('User assigned successfully to the policy to view the UI '))
-                    .catch(error => console.log('Error during user assignment to the policy to viewUI. ' + error));
-            }
-            return res.data.id;
-        }).catch(function(err) {
-                console.log('During  userName creation. User ' + userName + 'already exists ' + err);
-        });
+    console.log("Inside createUser...");
+    await getPolicy(ACTION_READ, "/flow").then(policyUI =>{
+        axios.post(NIFI_ENDPOINT + '/tenants/users', objToBeSent, {httpsAgent})
+            .then(function(res) {
+                console.log('User ' + userName + ' successfully created. ');
+                if(policyUI != null){
+                    policyUI.component.users.push({'revision': {'version': 0}, 'id': res.data.id,'component': {'identity': userName,'id': res.data.id}});
+                    axios.put(NIFI_ENDPOINT + '/policies/'+ policyUI['id'], policyUI, {httpsAgent})
+                        .then(result => console.log('User assigned successfully to the policy to view the UI '))
+                        .catch(error => console.log('Error during user assignment to the policy to viewUI. ' + error));
+                }
+                return res.data.id;
+            }).catch(function(err) {
+                    console.log('During user creation. User ' + userName + ' already exists ' + err);
+            });
+    })
 }
 
 /**
  * get User
  */
 var getUser = (userName) => {
+    console.log("Inside getUser " + userName);
     return axios.get(NIFI_ENDPOINT + '/tenants/users', {httpsAgent})
         .then(function(res) {
             var userlist = res.data.users;
             for(var i=0; i<userlist.length; i++){
-                if(userlist[i].component.identity == userName){
+                if(userlist[i].component.identity === userName){
                     return userlist[i];
                 }
             }
-        }).catch(function(err) {
-                console.log('Error during  getUser ' + err);
-        });
-}
-
+            return {};
+        }).catch(error => {console.log(error); return {};});
+    }
 /**
  * assign role to user
  */
 var assignRole2User = async (role, userName, processGrpId) => {
+    console.log("Inside assignRole2User...");
     var user = await getUser(userName);
-    if(user !== null && user !== undefined){
+    if(user !== null && user !== undefined && user != {}){
         var userGrp = await getUserGroup(role);
         userGrp.component.users.push({'revision': user.revision, "id": user.id});
         var groupId = userGrp.id;
+        console.log(NIFI_ENDPOINT + '/tenants/user-groups/' + groupId);
         //assign user to usrGrp
-        axios.put(NIFI_ENDPOINT + '/tenants/user-groups/' + groupId, userGrp, {httpsAgent})
+        await axios.put(NIFI_ENDPOINT + '/tenants/user-groups/' + groupId, userGrp, {httpsAgent})
             .then(function(res) {
                 console.log('User successfully assigned to the userGrp');
             }).catch(function(err) {
@@ -239,7 +230,8 @@ var assignRole2User = async (role, userName, processGrpId) => {
         var policyName = TYPE_PROCESS_GROUP + processGrpId;
         var policy = await getPolicy(ACTION_READ, policyName);
         policy.component.users.push({'revision': user.revision, "id": user.id});
-        axios.put(NIFI_ENDPOINT + '/policies/' + policy.id, userGrp, {httpsAgent})
+        console.log(NIFI_ENDPOINT + '/policies/' + policy.id);
+        await axios.put(NIFI_ENDPOINT + '/policies/' + policy.id, policy, {httpsAgent})
             .then(function(res) {
                 console.log('User successfully assigned to the policy '+policyName);
             }).catch(function(err) {
@@ -254,41 +246,81 @@ var assignRole2User = async (role, userName, processGrpId) => {
  * Create Policy
  */
 var createPolicy = async (action, resource, PGName, userGrps, userName) => {
+    console.log("Inside createPolicy"); 
     var newUserGrps = prepareUG4Policy(PGName, userGrps, action);
-    var adminUser = await getUser(ADMIN_USER);
-    var objToBeSent = {'revision': {'version': 0},'component': {'action': action, 'resource':resource, 'userGroups':newUserGrps}, 'users': [adminUser]};
-    console.log(objToBeSent);
-    axios.post(NIFI_ENDPOINT + '/policies', objToBeSent, {httpsAgent})
-        .then(result => {
-            console.log('Policy created successfully ');
-        }).catch(error => console.log('Error during createPolicy. ' + error));
+    await getUser(ADMIN_USER).then(adminUser =>{
+        var usr = {'revision': {'version': 0},'id': adminUser.id};
+        var objToBeSent = {'revision': {'version': 0},'component': {'action': action, 'resource':resource, 'userGroups':newUserGrps, 'users': [usr]}};
+        axios.post(NIFI_ENDPOINT + '/policies', objToBeSent, {httpsAgent})
+            .then(result => {
+                console.log('Policy created successfully ');
+                return result.data;
+            }).catch(error => {
+                console.log('During createPolicy. Policy already exists ' + error);
+                axios.put(NIFI_ENDPOINT + '/policies', objToBeSent, {httpsAgent})
+                    .then(result => {
+                        console.log('Policy created successfully ');
+                        return result.data;
+                    }) .catch(error => console.log("Error during policy creation2 "));
+            });
+        });
+}
+
+/**
+ * Update Policy
+ */
+var updatePolicy = async (policy, action, resource, PGName, userGrps, userName) => {
+    console.log("Inside updatePolicy"); 
+    var newUserGrps = prepareUG4Policy(PGName, userGrps, action);
+    await getUser(ADMIN_USER).then(adminUser =>{
+        var usr = {'revision': {'version': 0},'id': adminUser.id};
+        policy.component.userGroups = newUserGrps;
+        policy.component.users = [usr];
+        axios.put(NIFI_ENDPOINT + '/policies/' + policy.id, policy, {httpsAgent})
+            .then(result => {
+                console.log('Policy updated successfully ');
+                return result.data;
+            }) .catch(error => console.log("Error during updatePolicy " + error));
+        });
 }
 
 var upsertPolicy = async (action, resource, PGName, userGrps, userName) => {
-    var policy = await getPolicy(action, resource);
-    console.log("check policy existence ");
-    console.log(policy);
-    if(policy === null || policy === undefined){
-        createPolicy(action, resource, PGName, userGrps, userName);
-    }
+    console.log("Inside upsertPolicy " + action + " resource: " + resource);
+    try{
+        await getPolicy(action, resource, PGName, userGrps, userName)
+            .then(result =>{
+                console.log("check policy existence "); 
+                if(result != null && result.component != null && result.component.resource !== resource) {
+                    console.log("policy doesn't exist. creating it...");
+                    createPolicy(action, resource, PGName, userGrps, userName);
+                } else{
+                    console.log("policy exists. updating it...");
+                    updatePolicy(result, action, resource, PGName, userGrps, userName);
+                }
+            })
+            .catch(error => error)
+    } catch(error){console.log(error);}
 }
 
 /**
  * Get Policy
  */
 var getPolicy = (action, resource) => {
-    return axios.get(NIFI_ENDPOINT + '/policies/' + action + "/" + resource, {httpsAgent})
-        .then(res => res.data)
-        .catch(error => console.log('Error during getPolicy. ' + error));
+    console.log("Inside getPolicy: " + NIFI_ENDPOINT + '/policies/' + action + resource);
+    try{
+        return axios.get(NIFI_ENDPOINT + '/policies/' + action + resource, {httpsAgent})
+            .then(res => res.data)
+            .catch(error => error);
+    } catch(error){console.log(error);}
 }
 
 var assignPolicy = async (PGId, PGName, userName) => {
     var userGrps;
-    axios.get(NIFI_ENDPOINT + '/tenants/user-groups', {httpsAgent})
+    return axios.get(NIFI_ENDPOINT + '/tenants/user-groups', {httpsAgent})
         .then(result => {
-            console.log("listing user grps. ");console.log(result.data);
-            userGrps = result.data;
-            upsertPolicy(ACTION_READ,   TYPE_PROCESS_GROUP + PGId, PGName,userGrps, userName);
+            console.log("listing user grps. ");
+            userGrps = result.data.userGroups;
+            upsertPolicy(ACTION_READ,   TYPE_PROCESS_GROUP + PGId, PGName, userGrps, userName);
             upsertPolicy(ACTION_WRITE,  TYPE_PROCESS_GROUP + PGId, PGName, userGrps, userName);
             upsertPolicy(ACTION_READ,   TYPE_PROVENANCE + PGId, PGName,userGrps, userName);
             upsertPolicy(ACTION_WRITE,  TYPE_OPERATION + PGId, PGName,userGrps, userName);
@@ -299,18 +331,17 @@ var assignPolicy = async (PGId, PGName, userName) => {
     
 }
 
-var prepareUG4Policy = async(processGroupName, listUG, action) =>{
+var prepareUG4Policy = (processGroupName, listUG, action) =>{
     var name,id,role;
     var objGrp = {};
     var newGrps = [];
     for(var i=0; i<listUG.length; i++){
-        console.log("Inside prepareUG4Policy: " + listUG[i]["identity"] + listUG[i]["id"]);
-        name    = listUG[i]["identity"];
+        name    = listUG[i]["component"]['identity'];
         id      = listUG[i]["id"];
-        role    = name.substring(0,name.indexOf(":")+1);
+        role    = name.substring(name.indexOf(":")+1);
         if(name.substring(0,name.indexOf(":")) === processGroupName){
-            if(action === ACTION_READ || (action === ACTION_WRITE && (role === 'ROLE_PROVIDER' || role ==='ROLE_MANAGER'))){
-                objToBeSent = {'revision': {'version': 0},'id': id};
+            if(action === ACTION_READ || (action === ACTION_WRITE && (role === NIFI_ROLE_PROVIDER || role === NIFI_ROLE_MANAGER))){
+                objGrp = {'revision': {'version': 0},'id': id};
                 newGrps.push(objGrp);
             }
         }
