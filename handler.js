@@ -19,11 +19,11 @@ var TYPE_PROVENANCE          = "/provenance-data/process-groups/"; // view prove
 var TYPE_DATA                = "/data/process-groups/"; // view/empty queues, view metadata, submit replays
 var ACTION_READ              = "read";
 var ACTION_WRITE             = "write";
-var ADMIN_USER               = "admin";
+var ADMIN_USER               = "CN=admin, OU=NIFI";
 
 const httpsAgent = new https.Agent({
-  pfx: fs.readFileSync("./certificates/certificate.p12"),
-  passphrase: NIFI_CERTIFICATE_PASSW, 
+  pfx: fs.readFileSync("./certificates/CN=admin_OU=NIFI.p12"),
+  passphrase: NIFI_CERTIFICATE_PASSW
 })
 
 /**
@@ -256,13 +256,7 @@ var createPolicy = async (action, resource, PGName, userGrps, userName) => {
                 console.log('Policy created successfully ');
                 return result.data;
             }).catch(error => {
-                console.log('During createPolicy. Policy already exists ' + error);
-                axios.put(NIFI_ENDPOINT + '/policies', objToBeSent, {httpsAgent})
-                    .then(result => {
-                        console.log('Policy created successfully ');
-                        return result.data;
-                    }) .catch(error => console.log("Error during policy creation2 "));
-            });
+                console.log('During createPolicy.' + error);
         });
 }
 
