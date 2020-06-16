@@ -4,29 +4,31 @@
 **/
 function claimMapping(claims) {
     // extract roles
-    var path = 'components/';
-    var roles = claims.roles.filter(function(r) {
-            return r.indexOf(path) == 0;
-        })
-        .map(function(r) {
-            var subrole = r.substring(path.length);
-            var a = subrole.split(':');
-            return {
-                org: a[0].replace(/\//g, '_'),
-                role: a[1]
-            }
-        })
-        .reduce(function(prev, curr) { 
-	    // the categories of roles in NiFi
-            if(curr.role === 'ROLE_PROVIDER')
-                prev[curr.org] = 'ROLE_PROVIDER';
-            if(curr.role === 'ROLE_MANAGER')
-                prev[curr.org] = 'ROLE_MANAGER';
-            if(!prev[curr.org])
-                prev[curr.org] = 'ROLE_MONITOR';
-            
-            return prev;
-        }, {});
-    claims['nifi/roles'] = roles;
+    var path = 'components/nifi/';
+    if(claims.roles && claims.roles != null && claims.roles != undefined){
+        var roles = claims.roles.filter(function(r) {
+                return r.indexOf(path) == 0;
+            })
+            .map(function(r) {
+                var subrole = r.substring(path.length);
+                var a = subrole.split(':');
+                return {
+                    org: a[0].replace(/\//g, '->').replace(/\./g, '->'),
+                    role: a[1]
+                }
+            })
+            .reduce(function(prev, curr) { 
+    	    // the categories of roles in NiFi
+                if(curr.role === 'ROLE_PROVIDER')
+                    prev[curr.org] = 'ROLE_PROVIDER';
+                if(curr.role === 'ROLE_MANAGER')
+                    prev[curr.org] = 'ROLE_MANAGER';
+                if(!prev[curr.org])
+                    prev[curr.org] = 'ROLE_MONITOR';
+                
+                return prev;
+            }, {});
+        claims['nifi/roles'] = roles;
+    }
     return claims;
 }

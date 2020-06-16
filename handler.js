@@ -19,11 +19,14 @@ var TYPE_PROVENANCE          = "/provenance-data/process-groups/"; // view prove
 var TYPE_DATA                = "/data/process-groups/"; // view/empty queues, view metadata, submit replays
 var ACTION_READ              = "read";
 var ACTION_WRITE             = "write";
-var ADMIN_USER               = "CN=admin, OU=NIFI";
+var ADMIN_USER               = "admin";
 
 const httpsAgent = new https.Agent({
-  pfx: fs.readFileSync("./certificates/CN=admin_OU=NIFI.p12"),
-  passphrase: NIFI_CERTIFICATE_PASSW
+  //pfx: fs.readFileSync("./certificates/user-cert.p12"),
+  //passphrase: NIFI_CERTIFICATE_PASSW
+  cert: fs.readFileSync('./certificates/admin-cert.pem'),
+  key: fs.readFileSync('./certificates/admin-private-key.pem'),
+  ca: fs.readFileSync('./certificates/nifi-cert.pem')
 })
 
 /**
@@ -46,7 +49,7 @@ for (var h in headers) {
             }
             client.getSigningKey(header.kid, function(err, key) {
                 var signingKey = key ? key.publicKey || key.rsaPublicKey : null;
-                context.logger.info('New key ' + signingKey);
+                //context.logger.info('New key ' + signingKey);
                 if(signingKey === null)
                     context.callback(new context.Response({message: 'Missing signing key'}, {}, 'application/json', 401));
                 context.key = signingKey;
@@ -89,13 +92,14 @@ var createProcessGroup = async (parentId, processGroupName, processGroupId, assi
 }
 
 var createPG = (parentId, processGroupName) =>{
-    var objToBeSent = {'revision': {'version': 0},'position': {'x':Math.floor(Math.random()*1000), 'y':Math.floor(Math.random()*1000)}, 'component': {'name': processGroupName}};
+    var objToBeSent = {'revision': {'version': 0}, 'component': {'name': processGroupName, 'position': {'x':Math.floor(Math.random()*1000), 'y':Math.floor(Math.random()*1000)}}};
     console.log("Inside PG creation of processGroupName: " + processGroupName + " " + NIFI_ENDPOINT + '/process-groups/' + parentId + '/process-groups');
     return axios.post(NIFI_ENDPOINT + '/process-groups/' + parentId + '/process-groups', objToBeSent, {httpsAgent})
         .then(response => {
             console.log("created pgid " + response.data.id);
             return response.data.id;
-        });
+        })
+        .catch(error => {console.log("Problem during PG creation " + error);});
 }
 
 /**
@@ -208,6 +212,19 @@ var getUser = (userName) => {
             return {};
         }).catch(error => {console.log(error); return {};});
     }
+
+/**
+ * Delete User
+ */
+var deleteUser = async (userId) => {
+    console.log("Inside deleteUser " + userId);
+    return axios.delete(NIFI_ENDPOINT + '/tenants/users/'+ userId, {httpsAgent})
+        .then(function(res) {
+            console.log("User " + userId + " successfully deleted")
+            return {};
+        }).catch(error => {console.log(error); return {};});
+    }
+
 /**
  * assign role to user
  */
@@ -322,7 +339,7 @@ var assignPolicy = async (PGId, PGName, userName) => {
             upsertPolicy(ACTION_READ,   TYPE_DATA + PGId, PGName,userGrps, userName);
             upsertPolicy(ACTION_WRITE,  TYPE_DATA + PGId, PGName,userGrps, userName);
         })
-        .catch(error => console.log('Error during getUserGroup ' + err));
+        .catch(error => console.log('Error during getUserGroup ' + error));
     
 }
 
@@ -375,6 +392,23 @@ async function processGroupsUpsert(processGroupsToUpsert, roleName, username){
     );
 }
 
+async function processGroupsList(roles, username){
+    var user = await getUser(userName);
+    await deleteUser(user.id);
+    var organizations = [];   
+    var roleName = "";
+    for (var org in roles) {
+        console.log('Inside loop of orgs : ' + org + " " + roles[org]);                    
+        roleName = roles[org];
+        if(org.indexOf("->") >0){
+            organizations = org.split("->");
+        } else{
+            organizations = [];
+            organizations.push(org);
+        }
+        await processGroupsUpsert(organizations, roleName, username);
+    }
+}
 exports.handler = (context, event) => {
     extractClaims(context, event.headers, function(claims) {
         try{
@@ -384,27 +418,18 @@ exports.handler = (context, event) => {
             var username = claims.email;  
             var roles = claims[CUSTOMCLAIM_ROLES];    
             var organizations = [];   
-            var roleNames = [];
             var roleName = "";
             if(roles != undefined){
-                for (var org in roles) {
-                    context.logger.info('Inside loop of orgs : ' + org + " " + roles[org]);                    
-                    roleName = roles[org];
-                    if(org.indexOf("_") >0){
-                        organizations = org.split("_");
-                    } else{
-                        organizations = [];
-                        organizations.push(org);
-                    }
-                    processGroupsUpsert(organizations, roleName, username);
-                }
+                processGroupsList(roles, username);
                 context.callback(roles);
             } else{
+                context.logger.infoWith('Missing roles from AAC. Check the claim mapping')
                 context.callback(new context.Response({message: 'Missing roles from AAC. Check the claim mapping'}, {}, 'application/json', 500));
             } 
-            context.callback(processGroupName);
+            context.callback(roles);
         } catch(err){
-             context.callback(new context.Response({message: 'NIFI call failure', err: err}, {}, 'application/json', 500));
+            context.logger.infoWith('NIFI call failure' + err)
+            context.callback(new context.Response({message: 'NIFI call failure', err: err}, {}, 'application/json', 500));
         }
         
     });
