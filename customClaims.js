@@ -13,14 +13,12 @@ function claimMapping(claims) {
                 var subrole = r.substring(path.length);
                 var a = subrole.split(':');
                 return {
-                    org: a[0].replace(/\//g, '->').replace(/\./g, '->'),
+                    org: a[0].replace(/\//g, '_').replace(/\./g, '_'),
                     role: a[1]
                 }
             })
             .reduce(function(prev, curr) { 
     	    // the categories of roles in NiFi
-                if(curr.role === 'ROLE_PROVIDER')
-                    prev[curr.org] = 'ROLE_PROVIDER';
                 if(curr.role === 'ROLE_MANAGER')
                     prev[curr.org] = 'ROLE_MANAGER';
                 if(!prev[curr.org])

@@ -10,9 +10,8 @@ var NIFI_ENDPOINT            = process.env.NIFIENDPOINT;
 var NIFI_CERTIFICATE_PASSW   = process.env.NIFI_CERTIFICATE_PASSW;
 var CUSTOMCLAIM_ROLES        = "nifi/roles";
 var NIFI_PARENT_ROOT         = "root";
-var NIFI_ROLE_PROVIDER       = 'ROLE_PROVIDER';
 var NIFI_ROLE_MANAGER        = 'ROLE_MANAGER';
-var NIFI_ROLES               = [NIFI_ROLE_PROVIDER,'ROLE_MONITOR', NIFI_ROLE_MANAGER];
+var NIFI_ROLES               = ['ROLE_MONITOR', NIFI_ROLE_MANAGER];
 var TYPE_PROCESS_GROUP       = "/process-groups/"; // view/modify process group flow
 var TYPE_OPERATION           = "/operation/process-groups/"; // operate (run, stop, etc.) the process group
 var TYPE_PROVENANCE          = "/provenance-data/process-groups/"; // view provenance events
@@ -218,12 +217,26 @@ var getUser = (userName) => {
  */
 var deleteUser = async (userId) => {
     console.log("Inside deleteUser " + userId);
-    return axios.delete(NIFI_ENDPOINT + '/tenants/users/'+ userId, {httpsAgent})
+    return axios.delete(NIFI_ENDPOINT + '/tenants/users/'+ userId + '?version=0', {httpsAgent})
         .then(function(res) {
             console.log("User " + userId + " successfully deleted")
             return {};
         }).catch(error => {console.log(error); return {};});
     }
+
+/**
+ * Update User
+ */
+var updateUser = async (userId, userName) => {
+    console.log("Inside updateUser " + userId);
+    objToBeSent = {'revision': {'version': 0}, 'id': userId,'component': {'identity': userName,'id': userId, userGroups: []} };
+    return axios.put(NIFI_ENDPOINT + '/tenants/users/'+ userId, {httpsAgent})
+        .then(function(res) {
+            console.log("User " + userId + " successfully deleted")
+            return {};
+        }).catch(error => {console.log(error); return {};});
+    }
+
 
 /**
  * assign role to user
@@ -352,7 +365,7 @@ var prepareUG4Policy = (processGroupName, listUG, action) =>{
         id      = listUG[i]["id"];
         role    = name.substring(name.indexOf(":")+1);
         if(name.substring(0,name.indexOf(":")) === processGroupName){
-            if(action === ACTION_READ || (action === ACTION_WRITE && (role === NIFI_ROLE_PROVIDER || role === NIFI_ROLE_MANAGER))){
+            if(action === ACTION_READ || (action === ACTION_WRITE && role === NIFI_ROLE_MANAGER)){
                 objGrp = {'revision': {'version': 0},'id': id};
                 newGrps.push(objGrp);
             }
@@ -393,8 +406,9 @@ async function processGroupsUpsert(processGroupsToUpsert, roleName, username){
 }
 
 async function processGroupsList(roles, username){
-    var user = await getUser(userName);
-    await deleteUser(user.id);
+    var user = await getUser(username);
+    if(user != undefined && user !== null && username !== ADMIN_USER)
+        await deleteUser(user.id); // updateUser(user.id, username); 
     var organizations = [];   
     var roleName = "";
     for (var org in roles) {
