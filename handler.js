@@ -7,7 +7,6 @@ var https = require('https');
 var JWKS_URI                 = process.env.AACJWKURL;
 var CLIENT_ID                = process.env.AACCLIENTID;
 var NIFI_ENDPOINT            = process.env.NIFIENDPOINT;
-var NIFI_CERTIFICATE_PASSW   = process.env.NIFI_CERTIFICATE_PASSW;
 var CUSTOMCLAIM_ROLES        = "nifi/roles";
 var NIFI_PARENT_ROOT         = "root";
 var NIFI_ROLE_MANAGER        = 'ROLE_MANAGER';
@@ -21,8 +20,6 @@ var ACTION_WRITE             = "write";
 var ADMIN_USER               = "admin";
 
 const httpsAgent = new https.Agent({
-  //pfx: fs.readFileSync("./certificates/user-cert.p12"),
-  //passphrase: NIFI_CERTIFICATE_PASSW
   cert: fs.readFileSync('./certificates/admin-cert.pem'),
   key: fs.readFileSync('./certificates/admin-private-key.pem'),
   ca: fs.readFileSync('./certificates/nifi-cert.pem')
