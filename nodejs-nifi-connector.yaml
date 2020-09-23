@@ -7,7 +7,7 @@ spec:
   env:
     - name: AACJWKURL
       value: "http://AAC_URL:8080/aac/jwk"
-    - name: AACRESOURCEID
+    - name: AACCLIENTID
       value: AAC_RESOURCE_ID_VALUE
     - name: NIFIENDPOINT
       value: "http://NIFI_URL:8443/nifi_api"
