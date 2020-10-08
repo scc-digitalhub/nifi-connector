@@ -30,88 +30,45 @@ const httpsAgent = new https.Agent({
 * If the check is passed, then return extracted claims.
 */
 var extractClaims = async(context, headers, callback) => {
-for (var h in headers) {
-    if (h.toLowerCase() === 'authorization' && headers[h]) {
-        // Expect header in the form Bearer <JWT>
-        var token = headers[h].substring(headers[h].indexOf(' ')+1);
-        var jwksClient = require('jwks-rsa');
-        var client = jwksClient({
-            jwksUri: JWKS_URI
-        });
-        function getKey(header, keyCallback){
-            if (context.key) {
-                keyCallback(null, context.key);
-                return;
-            }
-            client.getSigningKey(header.kid, function(err, key) {
-                var signingKey = key ? key.publicKey || key.rsaPublicKey : null;
-                //context.logger.info('New key ' + signingKey);
-                if(signingKey === null)
-                    context.callback(new context.Response({message: 'Missing signing key'}, {}, 'application/json', 401));
-                context.key = signingKey;
-                keyCallback(null, signingKey);
+
+    for (var h in headers) {
+        if (h.toLowerCase() === 'authorization' && headers[h]) {
+            // Expect header in the form Bearer <JWT>
+            var token = headers[h].substring(headers[h].indexOf(' ')+1);
+            var jwksClient = require('jwks-rsa');
+            var client = jwksClient({
+                jwksUri: JWKS_URI
             });
-        }
-   
-        var options = { audience: CLIENT_ID };
-   
-        jwt.verify(token, getKey, options, function(err, decoded) {
-            context.logger.infoWith('Verify jwt: claims: ', decoded);
-            if (!decoded) {	
-                context.callback(new context.Response({message: 'Incorrect signature: ' , err: err}, {}, 'application/json', 401));
+            function getKey(header, keyCallback){
+                if (context.key) {
+                    keyCallback(null, context.key);
+                    return;
+                }
+                client.getSigningKey(header.kid, function(err, key) {
+                    var signingKey = key ? key.publicKey || key.rsaPublicKey : null;
+                    //context.logger.info('New key ' + signingKey);
+                    if(signingKey === null)
+                        context.callback(new context.Response({message: 'Missing signing key'}, {}, 'application/json', 401));
+                    context.key = signingKey;
+                    keyCallback(null, signingKey);
+                });
             }
-            callback(decoded);
-        }); 
-        return; 
+    
+            var options = { audience: CLIENT_ID };
+    
+            jwt.verify(token, getKey, options, function(err, decoded) {
+                context.logger.infoWith('Verify jwt: claims: ', decoded);
+                if (!decoded) {	
+                    context.callback(new context.Response({message: 'Incorrect signature: ' , err: err}, {}, 'application/json', 401));
+                }
+                callback(decoded);
+            }); 
+            return; 
+        }
     }
-}
-context.callback(new context.Response({message: 'Missing token'}, {}, 'application/json', 400));
+    context.callback(new context.Response({message: 'Missing token'}, {}, 'application/json', 400));
 } 
-/**
- * Create ProcessGroup
- */
-var createProcessGroup = async (parentId, processGroupName, processGroupId, assignRole, roleName, username) =>{
-    if(processGroupId === 0){
-        var newPGId = await createPG(parentId, processGroupName);
-        await createUser(username);
-        await NIFI_ROLES.reduce((p,role) => p.then(() => handleUserGroup(processGroupName + ":" + role)), Promise.resolve(null));
-        await assignPolicy(newPGId, processGroupName, username);
-        if(assignRole) assignRole2User(processGroupName + ":" + roleName, username, newPGId);
-        return [newPGId, 0, 0]
-    } else{
-        await createUser(username);
-        await NIFI_ROLES.reduce((p,role) => p.then(() => handleUserGroup(processGroupName + ":" + role)), Promise.resolve(null));
-        await assignPolicy(processGroupId, processGroupName, username);
-        if(assignRole) assignRole2User(processGroupName + ":" + roleName, username, processGroupId);
-        return Promise.resolve([processGroupId, processGroupName, parentId]);
-    }
-}
 
-var createPG = (parentId, processGroupName) =>{
-    var objToBeSent = {'revision': {'version': 0}, 'component': {'name': processGroupName, 'position': {'x':Math.floor(Math.random()*1000), 'y':Math.floor(Math.random()*1000)}}};
-    console.log("Inside PG creation of processGroupName: " + processGroupName + " " + NIFI_ENDPOINT + '/process-groups/' + parentId + '/process-groups');
-    return axios.post(NIFI_ENDPOINT + '/process-groups/' + parentId + '/process-groups', objToBeSent, {httpsAgent})
-        .then(response => {
-            console.log("created pgid " + response.data.id);
-            return response.data.id;
-        })
-        .catch(error => {console.log("Problem during PG creation " + error);});
-}
-
-/**
- * List ProcessGroups
- */
-var getPGId = (parentId, processGroupName) => {
-    console.log("Inside getPGId: " + processGroupName + " " + NIFI_ENDPOINT + '/flow/process-groups/' + parentId + '/status?recursive=false');
-    return axios.get(NIFI_ENDPOINT + '/flow/process-groups/' + parentId + '/status?recursive=false',  {httpsAgent})
-        .then(response => {
-            var pgId = readRecursivePG(response.data.processGroupStatus.aggregateSnapshot, processGroupName);
-            return [parentId, pgId];
-         })
-        .catch(function(err) {
-            console.log('Problem in get response of recursive process groups. getPGId' + err);
-        });
-}
 
 /**
  * Find the proper process group Id by checking in the descendant groups of the current node
@@ -146,222 +103,128 @@ var readRecursivePG =  (pgSnapshots, processGroupName) => {
 /**
  * Create UserGroup
  */
-var handleUserGroup = (userGrpName) => {
-    var objToBeSent = {'revision': {'version': 0},'component': {'identity': userGrpName}};
-    return axios.post(NIFI_ENDPOINT + '/tenants/user-groups', objToBeSent, {httpsAgent})
-        .then(res => {console.log('User Group ' + userGrpName + ' successfully created. ');return res.data.id;})
-        .catch(err => console.log('During user Group creation. UserGroup ' + userGrpName + ' already exists. ' + err));
+async function handleUserGroup(userGrpName) {
+    try {
+	    var objToBeSent = {'revision': {'version': 0},'component': {'identity': userGrpName}};
+	    await axios.post(NIFI_ENDPOINT + '/tenants/user-groups', objToBeSent, {httpsAgent});
+    } catch(err) {
+    	console.log('Error during user Group creation. Assume UserGroup ' + userGrpName + ' already exists. ' + err);
+    }
 }
 
 /**
  * get UserGroup
  */
-var getUserGroup = (userGrpName) => {
-    return axios.get(NIFI_ENDPOINT + '/tenants/user-groups', {httpsAgent})
-        .then(function(res) {
-            var userGrplist = res.data.userGroups;
-            for(var i=0; i<userGrplist.length; i++){
-                if(userGrplist[i].component.identity == userGrpName){
-                    return userGrplist[i];
-                }
+async function getUserGroup(userGrpName) {
+	try {
+		var res = await axios.get(NIFI_ENDPOINT + '/tenants/user-groups', {httpsAgent});
+		var userGrplist = res.data.userGroups;
+        for(var i=0; i<userGrplist.length; i++){
+        	if(userGrplist[i].component.identity == userGrpName){
+            	return userGrplist[i];
             }
-        }).catch(function(err) {
-            console.log('Error during getUserGroup ' + err);
-        });
+        }
+        return null;
+	} catch(err) {
+        console.log('Error during getUserGroup ' + err);
+	}
 }
 /**
  * Create User
  */
-var createUser = async(userName) => {
+async function createUser(userName) {
     var objToBeSent = {'revision': {'version': 0},'component': {'identity': userName}};
     console.log("Inside createUser...");
-    await getPolicy(ACTION_READ, "/flow").then(policyUI =>{
-        axios.post(NIFI_ENDPOINT + '/tenants/users', objToBeSent, {httpsAgent})
-            .then(function(res) {
-                console.log('User ' + userName + ' successfully created. ');
-                if(policyUI != null){
-                    policyUI.component.users.push({'revision': {'version': 0}, 'id': res.data.id,'component': {'identity': userName,'id': res.data.id}});
-                    axios.put(NIFI_ENDPOINT + '/policies/'+ policyUI['id'], policyUI, {httpsAgent})
-                        .then(result => console.log('User assigned successfully to the policy to view the UI '))
-                        .catch(error => console.log('Error during user assignment to the policy to viewUI. ' + error));
-                }
-                return res.data.id;
-            }).catch(function(err) {
-                    console.log('During user creation. User ' + userName + ' already exists ' + err);
-            });
-    })
+    var policyUI = await getPolicy(ACTION_READ, "/flow");
+    try {
+	    var res = await axios.post(NIFI_ENDPOINT + '/tenants/users', objToBeSent, {httpsAgent});
+        console.log('User ' + userName + ' successfully created. ');
+    	if(policyUI != null) {
+        	policyUI.component.users.push({'revision': {'version': 0}, 'id': res.data.id,'component': {'identity': userName,'id': res.data.id}});
+        	await axios.put(NIFI_ENDPOINT + '/policies/'+ policyUI['id'], policyUI, {httpsAgent});
+            console.log('User assigned successfully to the policy to view the UI ');
+        }    
+        return res.data.id;
+	} catch(err) {
+		console.log('During user creation. Assume ser ' + userName + ' already exists ' + err);
+	}  
 }
 
 /**
  * get User
  */
-var getUser = (userName) => {
+async function getUser(userName) {
     console.log("Inside getUser " + userName);
-    return axios.get(NIFI_ENDPOINT + '/tenants/users', {httpsAgent})
-        .then(function(res) {
-            var userlist = res.data.users;
-            for(var i=0; i<userlist.length; i++){
-                if(userlist[i].component.identity === userName){
-                    return userlist[i];
-                }
+    try {
+    	var res = await axios.get(NIFI_ENDPOINT + '/tenants/users', {httpsAgent});
+        var userlist = res.data.users;
+        for(var i=0; i<userlist.length; i++){
+        	if(userlist[i].component.identity === userName){
+            	return userlist[i];
             }
-            return {};
-        }).catch(error => {console.log(error); return {};});
+        }
+        return null;
+    } catch(err) {
+    	console.log(err);
+    	return null;
     }
+}
 
 /**
  * Delete User
  */
-var deleteUser = async (userId) => {
+async function deleteUser(userId) {
     console.log("Inside deleteUser " + userId);
-    return axios.delete(NIFI_ENDPOINT + '/tenants/users/'+ userId + '?version=0', {httpsAgent})
-        .then(function(res) {
-            console.log("User " + userId + " successfully deleted")
-            return {};
-        }).catch(error => {console.log(error); return {};});
+    try {
+	    var res = await axios.delete(NIFI_ENDPOINT + '/tenants/users/'+ userId + '?version=0', {httpsAgent}); 
+	    console.log("User " + userId + " successfully deleted")
+    } catch(err) {
+	    console.log(err);
     }
-
-/**
- * Update User
- */
-var updateUser = async (userId, userName) => {
-    console.log("Inside updateUser " + userId);
-    objToBeSent = {'revision': {'version': 0}, 'id': userId,'component': {'identity': userName,'id': userId, userGroups: []} };
-    return axios.put(NIFI_ENDPOINT + '/tenants/users/'+ userId, {httpsAgent})
-        .then(function(res) {
-            console.log("User " + userId + " successfully deleted")
-            return {};
-        }).catch(error => {console.log(error); return {};});
-    }
-
+}
 
 /**
  * assign role to user
  */
-var assignRole2User = async (role, userName, processGrpId) => {
+async function assignRole2User(role, userName, processGrpId) {
     console.log("Inside assignRole2User...");
     var user = await getUser(userName);
-    if(user !== null && user !== undefined && user != {}){
+    if(!!user){
         var userGrp = await getUserGroup(role);
         userGrp.component.users.push({'revision': user.revision, "id": user.id});
         var groupId = userGrp.id;
-        console.log(NIFI_ENDPOINT + '/tenants/user-groups/' + groupId);
         //assign user to usrGrp
-        await axios.put(NIFI_ENDPOINT + '/tenants/user-groups/' + groupId, userGrp, {httpsAgent})
-            .then(function(res) {
-                console.log('User successfully assigned to the userGrp');
-            }).catch(function(err) {
-                    console.log('Error during  assignRole2User: assign user to usrGrp ' + err);
-            });
+        try {
+	        var res = await axios.put(NIFI_ENDPOINT + '/tenants/user-groups/' + groupId, userGrp, {httpsAgent});
+    	    console.log('User successfully assigned to the userGrp');
+        } catch(err) {
+	         console.log('Error during  assignRole2User: assign user to usrGrp ' + err);
+        }
         // assign user to policy
         var policyName = TYPE_PROCESS_GROUP + processGrpId;
         var policy = await getPolicy(ACTION_READ, policyName);
         policy.component.users.push({'revision': user.revision, "id": user.id});
-        console.log(NIFI_ENDPOINT + '/policies/' + policy.id);
-        await axios.put(NIFI_ENDPOINT + '/policies/' + policy.id, policy, {httpsAgent})
-            .then(function(res) {
-                console.log('User successfully assigned to the policy '+policyName);
-            }).catch(function(err) {
-                    console.log('Error during  assignRole2User: assign user to policy ' + policyName + " "+ err);
-            });
+		try {
+			var res = await axios.put(NIFI_ENDPOINT + '/policies/' + policy.id, policy, {httpsAgent});
+		} catch(err) {
+			console.log('Error during  assignRole2User: assign user to policy ' + policyName + " "+ err);
+		}
     } else{
         console.log("User not found in assignRole2User");
     }
 }
 
-/**
- * Create Policy
- */
-var createPolicy = async (action, resource, PGName, userGrps, userName) => {
-    console.log("Inside createPolicy"); 
-    var newUserGrps = prepareUG4Policy(PGName, userGrps, action);
-    await getUser(ADMIN_USER).then(adminUser =>{
-        var usr = {'revision': {'version': 0},'id': adminUser.id};
-        var objToBeSent = {'revision': {'version': 0},'component': {'action': action, 'resource':resource, 'userGroups':newUserGrps, 'users': [usr]}};
-        axios.post(NIFI_ENDPOINT + '/policies', objToBeSent, {httpsAgent})
-            .then(result => {
-                console.log('Policy created successfully ');
-                return result.data;
-            }).catch(error => {
-                console.log('During createPolicy.' + error);
-            });
-        });
-}
 
-/**
- * Update Policy
- */
-var updatePolicy = async (policy, action, resource, PGName, userGrps, userName) => {
-    console.log("Inside updatePolicy"); 
-    var newUserGrps = prepareUG4Policy(PGName, userGrps, action);
-    await getUser(ADMIN_USER).then(adminUser =>{
-        var usr = {'revision': {'version': 0},'id': adminUser.id};
-        policy.component.userGroups = newUserGrps;
-        policy.component.users = [usr];
-        axios.put(NIFI_ENDPOINT + '/policies/' + policy.id, policy, {httpsAgent})
-            .then(result => {
-                console.log('Policy updated successfully ');
-                return result.data;
-            }) .catch(error => console.log("Error during updatePolicy " + error));
-        });
-}
-
-var upsertPolicy = async (action, resource, PGName, userGrps, userName) => {
-    console.log("Inside upsertPolicy " + action + " resource: " + resource);
-    try{
-        await getPolicy(action, resource, PGName, userGrps, userName)
-            .then(result =>{
-                console.log("check policy existence "); 
-                if(result != null && result.component != null && result.component.resource !== resource) {
-                    console.log("policy doesn't exist. creating it...");
-                    createPolicy(action, resource, PGName, userGrps, userName);
-                } else{
-                    console.log("policy exists. updating it...");
-                    updatePolicy(result, action, resource, PGName, userGrps, userName);
-                }
-            })
-            .catch(error => error)
-    } catch(error){console.log(error);}
-}
-
-/**
- * Get Policy
- */
-var getPolicy = (action, resource) => {
-    console.log("Inside getPolicy: " + NIFI_ENDPOINT + '/policies/' + action + resource);
-    try{
-        return axios.get(NIFI_ENDPOINT + '/policies/' + action + resource, {httpsAgent})
-            .then(res => res.data)
-            .catch(error => error);
-    } catch(error){console.log(error);}
-}
-
-var assignPolicy = async (PGId, PGName, userName) => {
-    var userGrps;
-    return axios.get(NIFI_ENDPOINT + '/tenants/user-groups', {httpsAgent})
-        .then(result => {
-            console.log("listing user grps. ");
-            userGrps = result.data.userGroups;
-            upsertPolicy(ACTION_READ,   TYPE_PROCESS_GROUP + PGId, PGName, userGrps, userName);
-            upsertPolicy(ACTION_WRITE,  TYPE_PROCESS_GROUP + PGId, PGName, userGrps, userName);
-            upsertPolicy(ACTION_READ,   TYPE_PROVENANCE + PGId, PGName,userGrps, userName);
-            upsertPolicy(ACTION_WRITE,  TYPE_OPERATION + PGId, PGName,userGrps, userName);
-            upsertPolicy(ACTION_READ,   TYPE_DATA + PGId, PGName,userGrps, userName);
-            upsertPolicy(ACTION_WRITE,  TYPE_DATA + PGId, PGName,userGrps, userName);
-        })
-        .catch(error => console.log('Error during getUserGroup ' + error));
-    
-}
-
-var prepareUG4Policy = (processGroupName, listUG, action) =>{
+function prepareUG4Policy(processGroupName, listUG, action){
     var name,id,role;
     var objGrp = {};
     var newGrps = [];
-    for(var i=0; i<listUG.length; i++){
-        name    = listUG[i]["component"]['identity'];
-        id      = listUG[i]["id"];
-        role    = name.substring(name.indexOf(":")+1);
-        if(name.substring(0,name.indexOf(":")) === processGroupName){
+    for(var i = 0; i<listUG.length; i++){
+        name    = listUG[i].component.identity;
+        id      = listUG[i].id;
+        var parts = name.split(':');
+        role    = parts[1];
+        if(parts[0] === processGroupName){
             if(action === ACTION_READ || (action === ACTION_WRITE && role === NIFI_ROLE_MANAGER)){
                 objGrp = {'revision': {'version': 0},'id': id};
                 newGrps.push(objGrp);
@@ -372,56 +235,159 @@ var prepareUG4Policy = (processGroupName, listUG, action) =>{
 }
 
 /**
+ * Update Policy
+ */
+async function updatePolicy(policy, action, resource, processGroupName, userGrps, userName) {
+    var newUserGrps = prepareUG4Policy(processGroupName, userGrps, action);
+    try {
+	    var adminUser = await getUser(ADMIN_USER);
+    	var usr = {'revision': {'version': 0},'id': adminUser.id};
+        policy.component.userGroups = newUserGrps;
+        policy.component.users = [usr];
+		var result = await axios.put(NIFI_ENDPOINT + '/policies/' + policy.id, policy, {httpsAgent});
+        console.log('Policy updated successfully ');
+		return result.data;
+	} catch(err) {
+		console.log("Error during updatePolicy " + err);	
+	}
+}
+/**
+ * Create Policy
+ */
+async function createPolicy(action, resource, processGroupName, userGrps, userName) {
+    var newUserGrps = prepareUG4Policy(processGroupName, userGrps, action);
+    try {
+	    var adminUser = await getUser(ADMIN_USER);
+    	var usr = {'revision': {'version': 0},'id': adminUser.id};
+	    var objToBeSent = {'revision': {'version': 0},'component': {'action': action, 'resource':resource, 'userGroups':newUserGrps, 'users': [usr]}};
+		var result = await axios.post(NIFI_ENDPOINT + '/policies', objToBeSent, {httpsAgent});
+	    console.log('Policy created successfully ');
+		return result.data; 
+    } catch(err) {
+    	console.log('During createPolicy.' + err);
+    	return null;
+    }
+}
+
+/**
+ * Get Policy
+ */
+async function getPolicy(action, resource) {
+    try{
+        var res = await axios.get(NIFI_ENDPOINT + '/policies/' + action + resource, {httpsAgent});
+        return res.data;
+    } catch(error){
+    	console.log('Policy ' + action +' on ' + resource +' not found: ' + error);
+    	return null;
+    }
+}
+
+async function upsertPolicy(action, resource, processGroupName, userGrps, userName) {
+    console.log("Inside upsertPolicy " + action + " resource: " + resource);
+    try{
+        var result = await getPolicy(action, resource, processGroupName, userGrps, userName);
+    	console.log("check policy existence "); 
+        if(!result || !!result.component && result.component.resource !== resource) {
+            console.log("policy doesn't exist. creating it...");
+        	await createPolicy(action, resource, processGroupName, userGrps, userName);
+        } else{
+        	console.log("policy exists. updating it...");
+            await updatePolicy(result, action, resource, processGroupName, userGrps, userName);
+        }
+    } catch(error){
+    	console.log(error);
+    }
+}
+
+async function assignPolicy(processGroupId, processGroupName, userName) {
+	try {
+    	var result = await axios.get(NIFI_ENDPOINT + '/tenants/user-groups', {httpsAgent});
+        var userGrps = result.data.userGroups;
+        await upsertPolicy(ACTION_READ,   TYPE_PROCESS_GROUP + processGroupId, processGroupName, userGrps, userName);
+        await upsertPolicy(ACTION_WRITE,  TYPE_PROCESS_GROUP + processGroupId, processGroupName, userGrps, userName);
+        await upsertPolicy(ACTION_READ,   TYPE_PROVENANCE + processGroupId,    processGroupName, userGrps, userName);
+        await upsertPolicy(ACTION_WRITE,  TYPE_OPERATION + processGroupId, 	   processGroupName, userGrps, userName);
+        await upsertPolicy(ACTION_READ,   TYPE_DATA + processGroupId,          processGroupName, userGrps, userName);
+        await upsertPolicy(ACTION_WRITE,  TYPE_DATA + processGroupId,          processGroupName, userGrps, userName);
+    } catch(err) {
+	    console.log('Error during assignPolicy ' + err);
+    }    
+}
+
+/**
+ * Create ProcessGroup
+ */
+async function processProcessGroup(processGroupId, processGroupName, parentId, roleName, username) {
+    console.log('processProcessGroup(' + processGroupId +', ' + processGroupName +')');
+    if(processGroupId === 0){
+        processGroupId = await createProcessGroup(parentId, processGroupName);
+        if (!processGroupId) {
+            return null;
+        }
+    }
+    await createUser(username);
+    for (var i = 0; i < NIFI_ROLES.length; i++) {
+    	await handleUserGroup(processGroupName + ":" + NIFI_ROLES[i]);
+    }
+    await assignPolicy(processGroupId, processGroupName, username);
+    await assignRole2User(processGroupName + ":" + roleName, username, processGroupId);
+}
+
+async function createProcessGroup(parentId, processGroupName) {
+    console.log('createProcessGroup(' + parentId +', ' + processGroupName +')');
+    var objToBeSent = {'revision': {'version': 0}, 'component': {'name': processGroupName, 'position': {'x':Math.floor(Math.random()*1000), 'y':Math.floor(Math.random()*1000)}}};
+    try {
+        var response = await axios.post(NIFI_ENDPOINT + '/process-groups/' + parentId + '/process-groups', objToBeSent, {httpsAgent});
+        return response.data.id;
+    } catch(err) {
+        console.log('Error creating process group ' + processGroupName+': ' + err);
+        return null;
+    }
+}
+
+/*
+ * Elaborate tenant request: create group, add user to group, and create policies
+ */
+async function processGroupsUpsert(groupToInsert, parentId, roleName, username){
+    var id = await checkExistence(parentId, groupToInsert);
+    await processProcessGroup(id, groupToInsert, parentId, roleName, username);
+}
+
+/**
  * Check the existence of process group before creating it, in order to avoid duplicates
  */
-function checkExistence(parentId, processGroupName, assignRole) {
+async function checkExistence(parentId, processGroupName, assignRole) {
     var url = NIFI_ENDPOINT + '/flow/process-groups/' + parentId + '/status?recursive=false';
-    return axios.get(url,{httpsAgent})
-        .then(response => {
-            var pgId = readRecursivePG(response.data.processGroupStatus.aggregateSnapshot, processGroupName);  
-            return [parentId, processGroupName, pgId, assignRole]
-        })
-        .catch(error => [parentId, processGroupName, 0, assignRole]);
+	try {
+	    var response = await axios.get(url,{httpsAgent});
+	    var pgId = readRecursivePG(response.data.processGroupStatus.aggregateSnapshot, processGroupName);
+	    return pgId;
+	} catch(e) {
+		console.log('Error reading parent group ' + e);
+		return 0;
+	}
 }
 
-function runTask(result, spec, assignRole) {
-    console.log("Inside runTask");
-    console.log(result); console.log(assignRole);
-    var parentId = "root";
-    if(result != undefined && result != null) parentId = result[0];
-    return checkExistence(parentId, spec, assignRole);
-}
-
-async function processGroupsUpsert(processGroupsToUpsert, roleName, username){
-    const starterPromise = Promise.resolve(["root", 0, 0]);
-    const action            = result => {if(Array.isArray(result)) return createProcessGroup(result[0], result[1], result[2], result[3], roleName, username)};
-    var count = processGroupsToUpsert.length;
-    await processGroupsToUpsert.reduce(
-        (p, spec, index) => p.then((result) => runTask(result, spec, index === count-1).then(action)),
-        starterPromise
-    );
-}
-
+/*
+ * Elaborate tenant list request: create groups, add user to groups, and create policies
+ */
 async function processGroupsList(roles, username){
+    // check and delete user (non admin)
     var user = await getUser(username);
-    if(user != undefined && user !== null && username !== ADMIN_USER)
-        await deleteUser(user.id); // updateUser(user.id, username); 
+    if(!!user && username !== ADMIN_USER) {
+    	await deleteUser(user.id);
+    }
+	var rootId = 'root';   
+    
     var organizations = [];   
     var roleName = "";
     for (var org in roles) {
-        console.log('Inside loop of orgs : ' + org + " " + roles[org]);                    
         roleName = roles[org];
-        if(org.indexOf("->") >0){
-            organizations = org.split("->");
-        } else{
-            organizations = [];
-            organizations.push(org);
-        }
-        await processGroupsUpsert(organizations, roleName, username);
+        await processGroupsUpsert(org, rootId, roleName, username);
     }
 }
 exports.handler = (context, event) => {
-    extractClaims(context, event.headers, function(claims) {
+    extractClaims(context, event.headers, async function(claims) {
         try{
             // extract roles
             context.logger.infoWith('Roles from AAC for Nifi: ', claims[CUSTOMCLAIM_ROLES]);
@@ -431,7 +397,7 @@ exports.handler = (context, event) => {
             var organizations = [];   
             var roleName = "";
             if(roles != undefined){
-                processGroupsList(roles, username);
+                await processGroupsList(roles, username);
                 context.callback(roles);
             } else{
                 context.logger.infoWith('Missing roles from AAC. Check the claim mapping')
