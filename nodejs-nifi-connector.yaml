@@ -29,7 +29,7 @@ spec:
       - 'npm install --global moment'
       - 'npm install --global jsonwebtoken'
       - 'npm install --global axios'
-      - 'npm install --global jwks-rsa'
+      - 'npm install --global jwks-rsa-promisified'
       - 'npm install --global request'
     codeEntryType: sourceCode
   volumes:
