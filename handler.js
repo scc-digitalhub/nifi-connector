@@ -7,6 +7,7 @@ var jwksClient = require('jwks-rsa-promisified');
 
 var JWKS_URI                 = process.env.AACJWKURL;
 var CLIENT_ID                = process.env.AACCLIENTID;
+var ISSUER                   = process.env.AACISSUER
 var NIFI_ENDPOINT            = process.env.NIFIENDPOINT;
 var CUSTOMCLAIM_ROLES        = "nifi/roles";
 var NIFI_PARENT_ROOT         = "root";
@@ -65,7 +66,8 @@ async function extractClaims(context, headers){
             var token = authorization.substring(authorization.indexOf(' ')+1);
             var kid = getKid(token);
             var key = await retrieveKey(kid);
-            var dec = await jwt.verify(token, key); 
+	    var options = { audience: CLIENT_ID, issuer: ISSUER};
+            var dec = await jwt.verify(token, key, options); 
             return dec;
         } else{
             return null;

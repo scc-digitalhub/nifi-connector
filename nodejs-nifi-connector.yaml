@@ -13,6 +13,8 @@ spec:
       value: "http://NIFI_URL:8443/nifi_api"
     - name: NIFI_CERTIFICATE_PASSW
       value: cert_password
+    - name: AACISSUER
+      value: "http://AAC_URL:8080/aac"
   resources: {}
   image: "nuclio/processor-nodejs-nifi:latest"
   minReplicas: 1
