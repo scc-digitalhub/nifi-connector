@@ -1,5 +1,5 @@
 metadata:
-  name: nodejs-nifi-connector
+  name: nodejs-nifi-connector-aac4
 spec:
   description: "Provision Users,ProcessGroup, Policy for NiFi"
   handler: "main:handler"
@@ -38,11 +38,11 @@ spec:
     codeEntryType: sourceCode
   volumes:
     - volumeMount:
-        name: certificate
+        name: certificates
         mountPath: /certificates
       volume:
-        name: certificate
-        hostPath:
-          path: /PATH_TO_NIFI_CERTIFICATE
+        name: certificates
+        secret:
+          secretName: nifi-user-cert-pem          
   platform: {}
   readinessTimeoutSeconds: 60
