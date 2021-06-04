@@ -436,7 +436,7 @@ async function preProvision(claims, logger) {
 async function processEvent(event, logger) {
     logger.info("Inside processEvent...");
 
-    var auth = extractAuth(event.headers, logger)
+    var auth = 'Basic ' + extractAuth(event.headers, logger)
     if (auth != AUTH) {
         throw Error("Invalid authentication");
     }
