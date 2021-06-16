@@ -22,6 +22,7 @@ var TYPE_DATA = "/data/process-groups/"; // view/empty queues, view metadata, su
 var ACTION_READ = "read";
 var ACTION_WRITE = "write";
 var ADMIN_USER = "admin";
+var ALL_PG_ROOT;
 
 const httpsAgent = new https.Agent({
     cert: fs.readFileSync('./certificates/admin-cert.pem'),
@@ -99,26 +100,17 @@ async function extractClaims(body, logger) {
 /**
  * Find the proper process group Id by checking in the descendant groups of the current node
  */
-var readRecursivePG = (pgSnapshots, processGroupName) => {
-    console.log("Inside readRecursivePG: " + processGroupName);
-    var currSnapShots;
-    if (pgSnapshots !== null && pgSnapshots.processGroupStatusSnapshots !== null &&
-        pgSnapshots != undefined && pgSnapshots.processGroupStatusSnapshots != undefined &&
-        pgSnapshots.processGroupStatusSnapshots.length > 0) {
-        for (var i = 0; i < pgSnapshots.processGroupStatusSnapshots.length; i++) {
-            currSnapShots = pgSnapshots.processGroupStatusSnapshots[i];
-            if (currSnapShots !== null) {
-                var currSnap = currSnapShots.processGroupStatusSnapshot;
-                if (currSnap !== null) {
-                    console.log("Inside readRecursivePG for pgId " + currSnap.id + " and pgName: " + currSnap.name);
-                    if (currSnap.name === processGroupName) {
-                        console.log("ProcessGroup name found: " + currSnap.name);
-                        return currSnap.id;
-                    }
-                    //var ret = readRecursivePG(currSnap, processGroupName);
-                    //if(ret != 0 ){
-                    //    return ret;
-                    //}
+var readAllPGs = (processGroups, processGroupName) => {
+    console.log("Inside readAllPGs: " + processGroupName);
+    var currSnap;
+    if (processGroups !== null && processGroups.length > 0) {
+        for (var i = 0; i < processGroups.length; i++) {
+            currSnap = processGroups[i];
+            if (currSnap !== null) {
+                console.log("Inside readAllPGs for pgId " + currSnap.id + " and pgName: " + currSnap.component.name);
+                if (currSnap.component.name === processGroupName) {
+                    console.log("ProcessGroup name found: " + currSnap.component.name);
+                    return currSnap.id;
                 }
             }
         }
@@ -372,6 +364,36 @@ async function createProcessGroup(parentId, processGroupName) {
 }
 
 /*
+ * Align all process groups coordinates
+ */
+async function alignPGsCoordinates(){
+    console.log("Inside alignPGsCoordinates ");
+    var currSnapShots;
+    var x_curr = 500;
+    var y_curr = 500;
+    var diff   = 500;
+    var cols   = 3;
+    var temp;
+    if(ALL_PG_ROOT !== null && ALL_PG_ROOT.length > 0){
+        for(var i=0; i < ALL_PG_ROOT.length; i++){
+            var currSnap = ALL_PG_ROOT[i];
+            if(currSnap !== null){
+                console.log("Aligning coordinates for pgId " + currSnap.id + " and pgName: " + currSnap.component.name + " and x: " + currSnap.component.position.x + " and y: " + currSnap.component.position.y);
+                console.log("New coordinates are: x: " + x_curr + " y: " + y_curr);
+                var objToBeSent = { 'revision': { 'version': currSnap.revision.version }, 'component': {'id' : currSnap.id, 'position': {'x': x_curr, 'y': y_curr}}};
+                await axios.put(NIFI_ENDPOINT + '/process-groups/'+ currSnap.id, objToBeSent, {httpsAgent});
+                temp = x_curr + diff;
+                if((diff * cols) / temp < 1 ){
+                    x_curr = 500
+                    y_curr = y_curr + 300
+                } else
+                    x_curr = temp;
+            }
+        }
+    }
+}
+
+/*
  * Elaborate tenant request: create group, add user to group, and create policies
  */
 async function processGroupsUpsert(groupToInsert, parentId, roleName, username) {
@@ -383,10 +405,13 @@ async function processGroupsUpsert(groupToInsert, parentId, roleName, username) 
  * Check the existence of process group before creating it, in order to avoid duplicates
  */
 async function checkExistence(parentId, processGroupName, assignRole) {
-    var url = NIFI_ENDPOINT + '/flow/process-groups/' + parentId + '/status?recursive=false';
+    console.log("Inside checkExistence...: " + parentId)
+    var url = NIFI_ENDPOINT + '/process-groups/' + parentId + '/process-groups';
     try {
         var response = await axios.get(url, { httpsAgent });
-        var pgId = readRecursivePG(response.data.processGroupStatus.aggregateSnapshot, processGroupName);
+        if(parentId == 'root')
+            ALL_PG_ROOT = response.data.processGroups;
+        var pgId = readAllPGs(response.data.processGroups, processGroupName);
         return pgId;
     } catch (e) {
         console.log('Error reading parent group ' + e);
@@ -411,6 +436,7 @@ async function processGroupsList(roles, username) {
         roleName = roles[org];
         await processGroupsUpsert(org, rootId, roleName, username);
     }
+    await alignPGsCoordinates();
 }
 
 async function preProvision(claims, logger) {

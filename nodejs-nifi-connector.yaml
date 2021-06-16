@@ -14,9 +14,7 @@ spec:
     - name: AAC_CLIENT_SECRET
       value: clientId     
     - name: NIFI_ENDPOINT
-      value: "http://NIFI_URL:8443/nifi_api"
-    - name: NIFI_CERTIFICATE_PASSW
-      value: cert_password
+      value: "http://NIFI_URL:8443/nifi-api"
   resources: {}
   image: "nuclio/processor-nodejs-nifi:latest"
   minReplicas: 1
