@@ -22,7 +22,6 @@ var TYPE_DATA = "/data/process-groups/"; // view/empty queues, view metadata, su
 var ACTION_READ = "read";
 var ACTION_WRITE = "write";
 var ADMIN_USER = "admin";
-var ALL_PG_ROOT;
 
 const httpsAgent = new https.Agent({
     cert: fs.readFileSync('./certificates/admin-cert.pem'),
@@ -64,7 +63,7 @@ function getKid(token) {
 
 function extractAuth(headers, logger) {
     try {
-        var authorization = Object.keys(headers).includes("Authorization") ? headers["Authorization"] : headers["authorization"];
+        var authorization = "Authorization" in headers ? headers["Authorization"] : headers["authorization"];
         if (authorization && authorization.startsWith("Basic ")) {
             return authorization.substring(authorization.indexOf(' ') + 1);
         } else {
@@ -94,28 +93,6 @@ async function extractClaims(body, logger) {
         logger.error(err.message)
         return null;
     }
-}
-
-
-/**
- * Find the proper process group Id by checking in the descendant groups of the current node
- */
-var readAllPGs = (processGroups, processGroupName) => {
-    console.log("Inside readAllPGs: " + processGroupName);
-    var currSnap;
-    if (processGroups !== null && processGroups.length > 0) {
-        for (var i = 0; i < processGroups.length; i++) {
-            currSnap = processGroups[i];
-            if (currSnap !== null) {
-                console.log("Inside readAllPGs for pgId " + currSnap.id + " and pgName: " + currSnap.component.name);
-                if (currSnap.component.name === processGroupName) {
-                    console.log("ProcessGroup name found: " + currSnap.component.name);
-                    return currSnap.id;
-                }
-            }
-        }
-    }
-    return 0;
 }
 
 /**
@@ -333,15 +310,39 @@ async function assignPolicy(processGroupId, processGroupName, userName) {
 }
 
 /**
+ * Read all process groups
+ */
+async function readAllPGs(parentId, logger) {
+    logger.info("Inside readAllPGs...")
+    var url = NIFI_ENDPOINT + '/process-groups/' + parentId + '/process-groups';
+    try {
+        var response = await axios.get(url, { httpsAgent });
+        return response.data.processGroups;
+    } catch (e) {
+        logger.error('Error reading parent group ' + e);
+        return null;
+    }
+}
+/**
+ * Transform process groups into an array containing their coordinates
+ */
+var transformPGs = (allProcessGroups) => {
+    return allProcessGroups.map(processGroup => {
+        return {"id": processGroup.id, "name" : processGroup.component.name, "x" : processGroup.position.x, "y" : processGroup.position.y};
+    })
+}
+/**
  * Create ProcessGroup
  */
-async function processProcessGroup(processGroupId, processGroupName, parentId, roleName, username) {
+async function processProcessGroup(processGroupId, processGroupName, parentId, roleName, username, processGroupsPositions) {
     console.log('processProcessGroup(' + processGroupId + ', ' + processGroupName + ')');
     if (processGroupId === 0) {
-        processGroupId = await createProcessGroup(parentId, processGroupName);
+        var freePosition = findFreeGridPosition(processGroupName, processGroupsPositions);
+        processGroupId = await createProcessGroup(parentId, processGroupName, freePosition);
         if (!processGroupId) {
             return null;
         }
+        processGroupsPositions.push({"id": processGroupId, "name" : processGroupName, "x" : freePosition.col, "y" : freePosition.row})
     }
     await createUser(username);
     for (var i = 0; i < NIFI_ROLES.length; i++) {
@@ -351,9 +352,9 @@ async function processProcessGroup(processGroupId, processGroupName, parentId, r
     await assignRole2User(processGroupName + ":" + roleName, username, processGroupId);
 }
 
-async function createProcessGroup(parentId, processGroupName) {
+async function createProcessGroup(parentId, processGroupName, freePosition) {
     console.log('createProcessGroup(' + parentId + ', ' + processGroupName + ')');
-    var objToBeSent = { 'revision': { 'version': 0 }, 'component': { 'name': processGroupName, 'position': { 'x': Math.floor(Math.random() * 1000), 'y': Math.floor(Math.random() * 1000) } } };
+    var objToBeSent = { 'revision': { 'version': 0 }, 'component': { 'name': processGroupName, 'position': { 'x': freePosition.col, 'y': freePosition.row } } };
     try {
         var response = await axios.post(NIFI_ENDPOINT + '/process-groups/' + parentId + '/process-groups', objToBeSent, { httpsAgent });
         return response.data.id;
@@ -363,80 +364,75 @@ async function createProcessGroup(parentId, processGroupName) {
     }
 }
 
-/*
- * Align all process groups coordinates
- */
-async function alignPGsCoordinates(){
-    console.log("Inside alignPGsCoordinates ");
-    var currSnapShots;
-    var x_curr = 500;
-    var y_curr = 500;
-    var diff   = 500;
-    var cols   = 3;
-    var temp;
-    if(ALL_PG_ROOT !== null && ALL_PG_ROOT.length > 0){
-        for(var i=0; i < ALL_PG_ROOT.length; i++){
-            var currSnap = ALL_PG_ROOT[i];
-            if(currSnap !== null){
-                console.log("Aligning coordinates for pgId " + currSnap.id + " and pgName: " + currSnap.component.name + " and x: " + currSnap.component.position.x + " and y: " + currSnap.component.position.y);
-                console.log("New coordinates are: x: " + x_curr + " y: " + y_curr);
-                var objToBeSent = { 'revision': { 'version': currSnap.revision.version }, 'component': {'id' : currSnap.id, 'position': {'x': x_curr, 'y': y_curr}}};
-                await axios.put(NIFI_ENDPOINT + '/process-groups/'+ currSnap.id, objToBeSent, {httpsAgent});
-                temp = x_curr + diff;
-                if((diff * cols) / temp < 1 ){
-                    x_curr = 500
-                    y_curr = y_curr + 300
-                } else
-                    x_curr = temp;
+var findFreeGridPosition = (newProcessGroup, processGroupsPositions) => {
+    console.log("Inside findFreeGridPosition...");
+    var cols = 3;
+    var x_diff = 500;
+    var y_diff = 300;
+    var grid = new Array();
+    var x_pos, y_pos, temp, remain_x, remain_y;
+    processGroupsPositions.forEach(pg => {
+        remain_x = pg.x % x_diff
+        x_pos = remain_x < 250 ? Math.floor(pg.x / x_diff) : Math.floor(pg.x / x_diff) + 1; // find the nearest horizontal position - col
+        remain_y = pg.y % y_diff
+        y_pos = remain_y < 150 ?  Math.floor(pg.y / y_diff) : Math.floor(pg.y / y_diff) + 1; // find the nearest vertical position - row
+        temp = !!grid[y_pos] ? grid[y_pos] : new Array();
+        if(!!!temp[x_pos]) temp[x_pos] = pg.name; else temp[temp.length] = pg.name
+        grid[y_pos] = temp;
+    });
+    var freePosition = grid.reduce((freePos, elem, index) => {
+        if(elem.length < cols) return {"row" : index, "col" : elem.length}
+        else{
+            for(i=0;i<elem.length; i++){
+                if(elem[i] == null || elem[i] == undefined)
+                    return {"row" : index, "col" : i}
             }
         }
-    }
+        return freePos
+    }, {"row" : grid.length, "col" : 0});
+    freePosition["row"] = freePosition["row"] * y_diff
+    freePosition["col"] = freePosition["col"] * x_diff
+    return freePosition;
 }
 
 /*
  * Elaborate tenant request: create group, add user to group, and create policies
  */
-async function processGroupsUpsert(groupToInsert, parentId, roleName, username) {
-    var id = await checkExistence(parentId, groupToInsert);
-    await processProcessGroup(id, groupToInsert, parentId, roleName, username);
+async function processGroupsUpsert(groupToInsert, parentId, roleName, username, processGroupsPositions) {
+    var id = await checkExistence(groupToInsert, processGroupsPositions);
+    await processProcessGroup(id, groupToInsert, parentId, roleName, username, processGroupsPositions);
 }
 
 /**
  * Check the existence of process group before creating it, in order to avoid duplicates
+ * Find the proper process group Id by checking in the descendant groups of the current node
  */
-async function checkExistence(parentId, processGroupName, assignRole) {
-    console.log("Inside checkExistence...: " + parentId)
-    var url = NIFI_ENDPOINT + '/process-groups/' + parentId + '/process-groups';
-    try {
-        var response = await axios.get(url, { httpsAgent });
-        if(parentId == 'root')
-            ALL_PG_ROOT = response.data.processGroups;
-        var pgId = readAllPGs(response.data.processGroups, processGroupName);
-        return pgId;
-    } catch (e) {
-        console.log('Error reading parent group ' + e);
-        return 0;
-    }
+var checkExistence = (processGroupName, processGroups) => {
+    console.log("Inside checkExistence of: " + processGroupName);
+    var wantedPG = processGroups.filter(pg => pg.name === processGroupName);
+    return wantedPG.length > 0 ? wantedPG[0]["id"] : 0;
 }
 
 /*
  * Elaborate tenant list request: create groups, add user to groups, and create policies
  */
-async function processGroupsList(roles, username) {
+async function processGroupsList(roles, username, logger) {
     // check and delete user (non admin)
     var user = await getUser(username);
     if (!!user && username !== ADMIN_USER) {
         await deleteUser(user.id);
     }
-    var rootId = 'root';
-
+    var rootId = NIFI_PARENT_ROOT;
+    // get all existing processGroups under root
+    var allProcessGroups = await readAllPGs(rootId, logger);
+    // map the existing processGroups into a different format
+    var processGroupsPositions = transformPGs(allProcessGroups);
     var organizations = [];
     var roleName = "";
     for (var org in roles) {
         roleName = roles[org];
-        await processGroupsUpsert(org, rootId, roleName, username);
+        await processGroupsUpsert(org, rootId, roleName, username, processGroupsPositions);
     }
-    await alignPGsCoordinates();
 }
 
 async function preProvision(claims, logger) {
@@ -449,7 +445,7 @@ async function preProvision(claims, logger) {
         var organizations = [];
         var roleName = "";
         if (roles != undefined && Object.keys(roles).length > 0) {
-            await processGroupsList(roles, username);
+            await processGroupsList(roles, username, logger);
             return roles;
         } else {
             return null;
