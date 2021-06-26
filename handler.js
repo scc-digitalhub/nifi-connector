@@ -435,7 +435,8 @@ var generateGrid = (processGroupsPositions, origin, cell_width, cell_height) => 
         if(y_bottom > (y_top + 1) * cell_height){
             temp = !!grid[y_top + 1] ? grid[y_top + 1] : new Array();
             if(!!!temp[x_left]) temp[x_left] = pg.name; else temp[x_left] += ", " + pg.name
-            if(!!!temp[x_left+1]) temp[x_left+1] = pg.name; else temp[x_left+1] += ", " + pg.name
+            if(x_right > (x_left + 1) * cell_width)
+                if(!!!temp[x_left+1]) temp[x_left+1] = pg.name; else temp[x_left+1] += ", " + pg.name
             grid[y_top + 1] = temp;
         }
     });
