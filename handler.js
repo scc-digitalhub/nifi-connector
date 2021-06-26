@@ -407,6 +407,7 @@ var findOriginCoSystem = (processGroupsPositions) => {
         if(elem.y < orig.y) orig.y = elem.y;
         return orig;
     }, {"x":Number.MAX_VALUE, "y":Number.MAX_VALUE});
+    if(processGroupsPositions.length < 1) origin = {"x":0, "y":0};
     return origin;
 }
 
