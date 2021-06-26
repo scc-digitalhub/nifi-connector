@@ -280,7 +280,7 @@ async function getPolicy(action, resource) {
 async function upsertPolicy(action, resource, processGroupName, userGrps, userName) {
     console.log("Inside upsertPolicy " + action + " resource: " + resource);
     try {
-        var result = await getPolicy(action, resource, processGroupName, userGrps, userName);
+        var result = await getPolicy(action, resource);
         console.log("check policy existence ");
         if (!result || !!result.component && result.component.resource !== resource) {
             console.log("policy doesn't exist. creating it...");
@@ -337,7 +337,7 @@ var transformPGs = (allProcessGroups) => {
 async function processProcessGroup(processGroupId, processGroupName, parentId, roleName, username, processGroupsPositions) {
     console.log('processProcessGroup(' + processGroupId + ', ' + processGroupName + ')');
     if (processGroupId === 0) {
-        var freePosition = findFreeGridPosition(processGroupName, processGroupsPositions);
+        var freePosition = findFreeGridPosition(processGroupsPositions);
         processGroupId = await createProcessGroup(parentId, processGroupName, freePosition);
         if (!processGroupId) {
             return null;
@@ -364,22 +364,27 @@ async function createProcessGroup(parentId, processGroupName, freePosition) {
     }
 }
 
-var findFreeGridPosition = (newProcessGroup, processGroupsPositions) => {
+/**
+    Find the empty position in the grid of process groups
+*/
+var findFreeGridPosition = (processGroupsPositions) => {
     console.log("Inside findFreeGridPosition...");
     var cols = 3;
-    var x_diff = 500;
-    var y_diff = 300;
-    var grid = new Array();
-    var x_pos, y_pos, temp, remain_x, remain_y;
-    processGroupsPositions.forEach(pg => {
-        remain_x = pg.x % x_diff
-        x_pos = remain_x < 250 ? Math.floor(pg.x / x_diff) : Math.floor(pg.x / x_diff) + 1; // find the nearest horizontal position - col
-        remain_y = pg.y % y_diff
-        y_pos = remain_y < 150 ?  Math.floor(pg.y / y_diff) : Math.floor(pg.y / y_diff) + 1; // find the nearest vertical position - row
-        temp = !!grid[y_pos] ? grid[y_pos] : new Array();
-        if(!!!temp[x_pos]) temp[x_pos] = pg.name; else temp[temp.length] = pg.name
-        grid[y_pos] = temp;
-    });
+    var cell_width = 450;
+    var cell_height = 200;
+    var origin = findOriginCoSystem(processGroupsPositions);
+    var grid = generateGrid(processGroupsPositions, origin, cell_width, cell_height);
+    console.log(grid);
+    var freePosition = calculateFreeCell(grid, cols);
+    freePosition["row"] = freePosition["row"] * cell_height + origin.y
+    freePosition["col"] = freePosition["col"] * cell_width + origin.x
+    return freePosition;
+}
+
+/**
+    Find the row with the missing elements, otherwise consider adding a new row
+*/
+var calculateFreeCell = (grid, cols) => {
     var freePosition = grid.reduce((freePos, elem, index) => {
         if(elem.length < cols) return {"row" : index, "col" : elem.length}
         else{
@@ -390,9 +395,51 @@ var findFreeGridPosition = (newProcessGroup, processGroupsPositions) => {
         }
         return freePos
     }, {"row" : grid.length, "col" : 0});
-    freePosition["row"] = freePosition["row"] * y_diff
-    freePosition["col"] = freePosition["col"] * x_diff
     return freePosition;
+}
+
+/**
+    Calculate the origin point of the coordinate system
+*/
+var findOriginCoSystem = (processGroupsPositions) => {
+    var origin = processGroupsPositions.reduce((orig, elem)=>{
+        if(elem.x < orig.x) orig.x = elem.x;
+        if(elem.y < orig.y) orig.y = elem.y;
+        return orig;
+    }, {"x":Number.MAX_VALUE, "y":Number.MAX_VALUE});
+    return origin;
+}
+
+/**
+    Generate the matrix of the existing process groups
+*/
+var generateGrid = (processGroupsPositions, origin, cell_width, cell_height) => {
+    var WIDTH = 390;
+    var HEIGHT = 185;
+    var grid = new Array();
+    var x_left, x_right, y_top, y_bottom, temp, left_dist, top_dist;
+    processGroupsPositions.forEach(pg => {
+        left_dist = pg.x - origin.x;
+        x_left = Math.floor(left_dist / cell_width);
+        top_dist = pg.y - origin.y;
+        y_top = Math.floor(top_dist / cell_height);
+        temp = !!grid[y_top] ? grid[y_top] : new Array();
+        if(!!!temp[x_left]) temp[x_left] = pg.name; else temp[x_left] += ", " + pg.name;
+        x_right = left_dist + WIDTH;
+        if(x_right > (x_left + 1) * cell_width){
+            if(!!!temp[x_left+1]) temp[x_left+1] = pg.name; else temp[x_left+1] += ", " + pg.name;
+        }
+        grid[y_top] = temp;
+
+        y_bottom = top_dist + HEIGHT;
+        if(y_bottom > (y_top + 1) * cell_height){
+            temp = !!grid[y_top + 1] ? grid[y_top + 1] : new Array();
+            if(!!!temp[x_left]) temp[x_left] = pg.name; else temp[x_left] += ", " + pg.name
+            if(!!!temp[x_left+1]) temp[x_left+1] = pg.name; else temp[x_left+1] += ", " + pg.name
+            grid[y_top + 1] = temp;
+        }
+    });
+    return grid;
 }
 
 /*
