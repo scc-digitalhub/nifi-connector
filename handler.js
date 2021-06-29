@@ -294,7 +294,7 @@ async function upsertPolicy(action, resource, processGroupName, userGrps, userNa
     }
 }
 
-async function assignPolicy(processGroupId, processGroupName, userName) {
+async function assignPolicy(processGroupId, processGroupName, userName, parentId) {
     try {
         var result = await axios.get(NIFI_ENDPOINT + '/tenants/user-groups', { httpsAgent });
         var userGrps = result.data.userGroups;
@@ -304,6 +304,10 @@ async function assignPolicy(processGroupId, processGroupName, userName) {
         await upsertPolicy(ACTION_WRITE, TYPE_OPERATION + processGroupId, processGroupName, userGrps, userName);
         await upsertPolicy(ACTION_READ, TYPE_DATA + processGroupId, processGroupName, userGrps, userName);
         await upsertPolicy(ACTION_WRITE, TYPE_DATA + processGroupId, processGroupName, userGrps, userName);
+        // remove the policy to operate on root process group
+        await upsertPolicy(ACTION_READ,  TYPE_OPERATION +     parentId, processGroupName, userGrps, userName);
+        // add write policy to the root so that to have the ability to delete PGs.
+        await upsertPolicy(ACTION_WRITE, TYPE_PROCESS_GROUP + parentId, processGroupName, userGrps, userName);
     } catch (err) {
         console.log('Error during assignPolicy ' + err);
     }
@@ -323,6 +327,22 @@ async function readAllPGs(parentId, logger) {
         return null;
     }
 }
+
+/**
+ * Get the id of the root process group
+ */
+async function readRootPGId(parentId, logger) {
+    logger.info("Inside readRootPGId...")
+    var url = NIFI_ENDPOINT + '/process-groups/' + parentId;
+    try {
+        var response = await axios.get(url, { httpsAgent });
+        return response.data.id;
+    } catch (e) {
+        logger.error('Error reading root process group ' + e);
+        return null;
+    }
+}
+
 /**
  * Transform process groups into an array containing their coordinates
  */
@@ -334,11 +354,11 @@ var transformPGs = (allProcessGroups) => {
 /**
  * Create ProcessGroup
  */
-async function processProcessGroup(processGroupId, processGroupName, parentId, roleName, username, processGroupsPositions) {
+async function processProcessGroup(processGroupId, processGroupName, parentName, parentId, roleName, username, processGroupsPositions) {
     console.log('processProcessGroup(' + processGroupId + ', ' + processGroupName + ')');
     if (processGroupId === 0) {
         var freePosition = findFreeGridPosition(processGroupsPositions);
-        processGroupId = await createProcessGroup(parentId, processGroupName, freePosition);
+        processGroupId = await createProcessGroup(parentName, processGroupName, freePosition);
         if (!processGroupId) {
             return null;
         }
@@ -348,7 +368,7 @@ async function processProcessGroup(processGroupId, processGroupName, parentId, r
     for (var i = 0; i < NIFI_ROLES.length; i++) {
         await handleUserGroup(processGroupName + ":" + NIFI_ROLES[i]);
     }
-    await assignPolicy(processGroupId, processGroupName, username);
+    await assignPolicy(processGroupId, processGroupName, username, parentId);
     await assignRole2User(processGroupName + ":" + roleName, username, processGroupId);
 }
 
@@ -447,9 +467,9 @@ var generateGrid = (processGroupsPositions, origin, cell_width, cell_height) => 
 /*
  * Elaborate tenant request: create group, add user to group, and create policies
  */
-async function processGroupsUpsert(groupToInsert, parentId, roleName, username, processGroupsPositions) {
+async function processGroupsUpsert(groupToInsert, rootName, rootId, roleName, username, processGroupsPositions) {
     var id = await checkExistence(groupToInsert, processGroupsPositions);
-    await processProcessGroup(id, groupToInsert, parentId, roleName, username, processGroupsPositions);
+    await processProcessGroup(id, groupToInsert, rootName, rootId, roleName, username, processGroupsPositions);
 }
 
 /**
@@ -471,16 +491,18 @@ async function processGroupsList(roles, username, logger) {
     if (!!user && username !== ADMIN_USER) {
         await deleteUser(user.id);
     }
-    var rootId = NIFI_PARENT_ROOT;
+    var rootName = NIFI_PARENT_ROOT;
     // get all existing processGroups under root
-    var allProcessGroups = await readAllPGs(rootId, logger);
+    var allProcessGroups = await readAllPGs(rootName, logger);
+    // root process group ID
+    var rootId = await readRootPGId(rootName, logger);
     // map the existing processGroups into a different format
     var processGroupsPositions = transformPGs(allProcessGroups);
     var organizations = [];
     var roleName = "";
     for (var org in roles) {
         roleName = roles[org];
-        await processGroupsUpsert(org, rootId, roleName, username, processGroupsPositions);
+        await processGroupsUpsert(org, rootName, rootId, roleName, username, processGroupsPositions);
     }
 }
 
